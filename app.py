@@ -715,12 +715,41 @@ def main():
         st.info("الرجاء رفع ملف Excel يحتوي بيانات المبيعات لبدء التحليل.")
         return
 
-    tabs = st.tabs(["👤 العميل (مقارنة سنتين)", "📈 Pivot شامل"])
+    tabs = st.tabs([
+        "👤 العميل (مقارنة سنتين)",
+        "📈 Pivot شامل",
+        "📦 تحليل المنتجات والمجموعات"
+    ])
+    
     with tabs[0]:
         customer_year_compare_tab(df)
     with tabs[1]:
         pivot_tab(df)
+    with tabs[2]:
+        products_analysis_tab(df)  # دالة جديدة نكتبها لتحليل المنتجات
 
 
 if __name__ == "__main__":
     main()
+
+
+
+def products_analysis_tab(df):
+    st.header("📦 تحليل المنتجات والمجموعات")
+
+    # فلتر العملاء
+    customers = st.multiselect("اختر العملاء", df["العميل"].unique())
+
+    # فلتر المجموعات
+    groups = st.multiselect("اختر المجموعات", df["المجموعة"].unique())
+
+    filtered_df = df.copy()
+    if customers:
+        filtered_df = filtered_df[filtered_df["العميل"].isin(customers)]
+    if groups:
+        filtered_df = filtered_df[filtered_df["المجموعة"].isin(groups)]
+
+    total_sales = filtered_df["المبيعات"].sum()
+    st.metric("إجمالي المبيعات", f"{total_sales:,.2f}")
+
+    st.dataframe(filtered_df)
