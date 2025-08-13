@@ -976,6 +976,216 @@ def products_analysis_tab(df: pd.DataFrame):
 
 
 
+
+###########################################################################################
+
+def owner_overview_tab(df: pd.DataFrame):
+    """تبويب بسيط لصاحب العمل: نظرة تنفيذية مختصرة مع فلاتر خاصة."""
+    st.subheader("📌 ملخص سريع", divider="rainbow")
+
+    # 1) تجهيز الأعمدة والمشتقات
+    cols = _detect_all_columns(df)
+    df, cols = _ensure_date_month_year(df, cols)
+    df = _add_derived_columns(df, cols)
+
+    c_date    = cols.get("date")
+    c_cust    = cols.get("customer")
+    c_group   = cols.get("item_group")
+    c_item    = cols.get("item")
+    c_invoice = cols.get("invoice")
+
+    # 2) فلاتر تبويب مستقلة (بسيطة)
+    st.markdown("#### 🎛️ فلاتر سريعة")
+    fc1, fc2, fc3 = st.columns([2, 2, 2])
+
+    # فترة سريعة
+    with fc1:
+        period_choice = st.radio(
+            "الفترة",
+            ["السنة الحالية", "السنة السابقة", "آخر 12 شهرًا", "كل الوقت"],
+            horizontal=True,
+            key="ov_period_choice"
+        )
+
+    # البعد للترتيب (عميل/مجموعة/منتج)
+    with fc2:
+        rank_by = st.selectbox(
+            "رتّب حسب",
+            [("العميل", c_cust), ("المجموعة", c_group), ("المنتج", c_item)],
+            format_func=lambda t: t[0],
+            index=0,
+            key="ov_rank_by"
+        )
+
+    # المقياس الأساسي
+    with fc3:
+        metric_choice = st.selectbox(
+            "المقياس",
+            ["المبيعات", "الربح", "الكمية"],
+            index=0,
+            key="ov_metric_choice"
+        )
+
+    # 3) تطبيق الفترة
+    dff = df.copy()
+    if c_date and c_date in dff.columns:
+        dseries = pd.to_datetime(dff[c_date], errors="coerce")
+        today = pd.Timestamp.today().normalize()
+        if period_choice == "السنة الحالية":
+            mask = (dseries.dt.year == today.year)
+            dff = dff[mask]
+        elif period_choice == "السنة السابقة":
+            mask = (dseries.dt.year == (today.year - 1))
+            dff = dff[mask]
+        elif period_choice == "آخر 12 شهرًا":
+            start = (today - pd.DateOffset(months=12)).replace(day=1)
+            dff = dff[(dseries >= start) & (dseries <= today)]
+        # "كل الوقت" => بدون فلترة زمنية
+    # لو لا يوجد تاريخ، نكمل بدون فلترة
+
+    if dff.empty:
+        st.warning("لا توجد بيانات ضمن الفترة المختارة.")
+        return
+
+    # 4) مؤشرات رئيسية (KPIs)
+    sales  = float(dff["__sales_total__"].sum())
+    cost   = float(dff["__cost_total__"].sum())
+    profit = float(dff["الربح"].sum()) if "الربح" in dff.columns else (sales - cost)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        margin_pct = (profit / sales * 100.0) if sales else np.nan
+
+    qty    = float(dff["__qty__"].sum()) if "__qty__" in dff.columns else np.nan
+    invs   = dff[c_invoice].nunique() if c_invoice and c_invoice in dff.columns else np.nan
+    avg_inv = (sales / invs) if (invs and not pd.isna(invs) and invs != 0) else np.nan
+
+    n_cust  = dff[c_cust].nunique() if c_cust else np.nan
+    n_group = dff[c_group].nunique() if c_group else np.nan
+    n_item  = dff[c_item].nunique()  if c_item  else np.nan
+
+    k1, k2, k3, k4 = st.columns(4)
+    k5, k6, k7, k8 = st.columns(4)
+    k1.metric("إجمالي المبيعات", f"{sales:,.0f}")
+    k2.metric("إجمالي الربح", f"{profit:,.0f}")
+    k3.metric("هامش الربح %", "-" if pd.isna(margin_pct) else f"{margin_pct:,.0f}%")
+    k4.metric("متوسط الفاتورة", "-" if pd.isna(avg_inv) else f"{avg_inv:,.0f}")
+    k5.metric("إجمالي الكمية", "-" if pd.isna(qty) else f"{qty:,.0f}")
+    k6.metric("عدد الفواتير", "-" if pd.isna(invs) else f"{int(invs):,}")
+    k7.metric("عدد العملاء", "-" if pd.isna(n_cust) else f"{int(n_cust):,}")
+    k8.metric("عدد المنتجات", "-" if pd.isna(n_item) else f"{int(n_item):,}")
+
+    st.markdown("---")
+
+    # 5) أعلى 10 حسب البعد المختار
+    dim_name, dim_col = rank_by  # ("العميل", actual_col_name) مثلاً
+    if not dim_col:
+        st.info(f"لا يوجد عمود لــ {dim_name} في البيانات.")
+        return
+
+    # سنجمع: مبيعات/ربح/كمية + عدد الفواتير في هذا البعد
+    agg_cols = {
+        "__sales_total__": "sum",
+        "__cost_total__": "sum",
+        "الربح": "sum",
+        "__qty__": "sum",
+    }
+    # عدد فواتير فريد لكل كيان (إن توفر invoice)
+    use_invoices = c_invoice and (c_invoice in dff.columns)
+
+    g = dff.groupby(dim_col, dropna=False).agg(agg_cols).reset_index()
+    if use_invoices:
+        inv_cnt = dff.groupby(dim_col)[c_invoice].nunique().reset_index(name="عدد الفواتير")
+        g = g.merge(inv_cnt, on=dim_col, how="left")
+    else:
+        g["عدد الفواتير"] = np.nan
+
+    # إعادة تسمية عربية
+    g.rename(columns={
+        dim_col: dim_name,
+        "__sales_total__": "المبيعات",
+        "__cost_total__": "التكلفة",
+        "الربح": "الربح",
+        "__qty__": "الكمية",
+    }, inplace=True)
+
+    # هامش %
+    with np.errstate(divide="ignore", invalid="ignore"):
+        g["% الربح"] = np.where(g["المبيعات"] != 0, (g["الربح"]/g["المبيعات"])*100.0, np.nan)
+
+    # الترتيب حسب المقياس المختار
+    order_col = {"المبيعات": "المبيعات", "الربح": "الربح", "الكمية": "الكمية"}[metric_choice]
+    g = g.sort_values(order_col, ascending=False)
+
+    # عرض أعلى 10
+    st.markdown(f"### 🏆 أعلى 10 حسب **{dim_name}** (بناءً على **{metric_choice}**)")
+
+    show = g.head(10).copy()
+    for c in ["المبيعات", "التكلفة", "الربح", "الكمية"]:
+        if c in show.columns:
+            show[c] = show[c].apply(lambda x: f"{x:,.0f}")
+    if "% الربح" in show.columns:
+        show["% الربح"] = show["% الربح"].apply(lambda x: "" if pd.isna(x) else f"{x:,.0f}%")
+    if "عدد الفواتير" in show.columns:
+        show["عدد الفواتير"] = show["عدد الفواتير"].apply(lambda x: "" if pd.isna(x) else f"{int(x):,}")
+
+    st.dataframe(show, use_container_width=True, hide_index=True)
+
+    # 6) رسم عمودي بسيط
+    try:
+        import plotly.express as px
+        chart_df = g.head(10)
+        fig = px.bar(
+            chart_df,
+            x=dim_name,
+            y=order_col,
+            hover_data=["المبيعات", "الربح", "% الربح", "عدد الفواتير"],
+            title=f"أعلى 10 ({dim_name}) حسب {metric_choice}"
+        )
+        fig.update_layout(margin=dict(l=10, r=10, t=40, b=10))
+        st.plotly_chart(fig, use_container_width=True)
+    except Exception:
+        pass
+
+    # 7) تنزيل Excel
+    st.markdown("---")
+    out = BytesIO()
+    with pd.ExcelWriter(out, engine="xlsxwriter") as writer:
+        # ملخص عام
+        summary_df = pd.DataFrame([{
+            "الفترة": period_choice,
+            "إجمالي المبيعات": sales,
+            "إجمالي الربح": profit,
+            "هامش الربح %": margin_pct,
+            "إجمالي الكمية": qty,
+            "عدد الفواتير": invs,
+            "متوسط الفاتورة": avg_inv,
+            "عدد العملاء": n_cust,
+            "عدد المنتجات": n_item,
+        }])
+        summary_df.to_excel(writer, index=False, sheet_name="Summary")
+
+        # الترتيب الكامل
+        g.to_excel(writer, index=False, sheet_name="Ranking")
+
+        # تنسيق بسيط
+        wb = writer.book
+        for sh in ["Summary", "Ranking"]:
+            if sh in writer.sheets:
+                ws = writer.sheets[sh]
+                ws.set_column(0, 0, 22)
+                ws.set_column(1, 30, 18)
+    st.download_button(
+        "⬇️ تنزيل ملخص سريع (Excel)",
+        data=out.getvalue(),
+        file_name="owner_overview.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+
+###########################################################################################################
+
+
+
+
 # -------------------------------
 # Main
 # -------------------------------
@@ -990,7 +1200,8 @@ def main():
     tabs = st.tabs([
         "👤 العميل (مقارنة سنتين)",
         "📈 Pivot شامل",
-        "📦 تحليل المنتجات والمجموعات"
+        "📦 تحليل المنتجات والمجموعات",
+        "📌 ملخص سريع"          # ← التبويب الجديد
     ])
     
     with tabs[0]:
@@ -999,6 +1210,8 @@ def main():
         pivot_tab(df)
     with tabs[2]:
         products_analysis_tab(df)  # دالة جديدة نكتبها لتحليل المنتجات
+    with tabs[3]:
+        owner_overview_tab(df)
 
 
 if __name__ == "__main__":
