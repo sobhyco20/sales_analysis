@@ -894,7 +894,7 @@ def products_analysis_tab(df: pd.DataFrame):
         tg_show["% الربح"] = tg_show["% الربح"].apply(lambda x: "" if pd.isna(x) else f"{x:,.0f}%")
     st.dataframe(tg_show.head(50), use_container_width=True, hide_index=True)
 
-    st.markdown("### 👥 مصفوفة (العميل × المجموعة)")
+    st.markdown("### 👥 تحليل (العميل / المجموعة)")
     cg_show = cust_group.copy()
     for col in ["الكمية", "المبيعات", "الربح"]:
         if col in cg_show.columns:
