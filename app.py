@@ -705,64 +705,274 @@ def pivot_tab(df: pd.DataFrame):
 
 
 
-def products_analysis_tab(df):
-    st.header("📦 تحليل المنتجات والمجموعات")
 
-    # محاولة تحديد اسم عمود العميل وعمود المجموعة بشكل ديناميكي
-    customer_col = None
-    group_col = None
-    product_col = None
-    qty_col = None
-    total_col = None
 
-    for col in df.columns:
-        if "عميل" in col or "Customer" in col:
-            customer_col = col
-        elif "مجموعة" in col or "Group" in col:
-            group_col = col
-        elif "منتج" in col or "Product" in col:
-            product_col = col
-        elif "كمية" in col or "Quantity" in col:
-            qty_col = col
-        elif "إجمالي" in col or "Total" in col or "قيمة" in col:
-            total_col = col
+def products_analysis_tab(df: pd.DataFrame):
+    """تبويب مستقل لتحليل المنتجات ومجموعات المنتجات مع العملاء."""
+    st.subheader("📦 تحليل المنتجات والمجموعات", divider="rainbow")
 
-    # تحقق من الأعمدة المطلوبة
-    if not customer_col or not product_col:
-        st.error("❌ لم يتم العثور على أعمدة العميل أو المنتج في الملف")
+    # 1) اكتشاف الأعمدة + تجهيز التاريخ والمشتقات
+    cols = _detect_all_columns(df)
+    df, cols = _ensure_date_month_year(df, cols)
+    df = _add_derived_columns(df, cols)
+
+    c_customer = cols.get("customer")
+    c_item     = cols.get("item")
+    c_group    = cols.get("item_group")
+    c_date     = cols.get("date")
+    c_invoice  = cols.get("invoice")
+
+    # تحقق أساسي من الأعمدة الحرجة
+    missing = []
+    if not c_item:     missing.append("item / ITEM NAME")
+    if not c_group:    missing.append("item_group / ITEM Group")
+    if not c_customer: missing.append("customer / CUSTOMER NAME")
+    if missing:
+        st.error("لا يمكن تشغيل هذا التبويب لعدم توفر أعمدة أساسية: " + "، ".join(missing))
         return
 
-    # فلاتر
-    customers = st.multiselect("اختر العملاء", df[customer_col].dropna().unique())
-    groups = []
-    if group_col:
-        groups = st.multiselect("اختر المجموعات", df[group_col].dropna().unique())
+    # 2) واجهة فلاتر التبويب (مستقلة عن الشريط الجانبي)
+    st.markdown("#### 🎛️ فلاتر التحليل (خاصة بهذا التبويب)")
+    fc1, fc2, fc3 = st.columns([2, 2, 2])
+    fc4, fc5 = st.columns([2, 2])
 
-    filtered_df = df.copy()
-    if customers:
-        filtered_df = filtered_df[filtered_df[customer_col].isin(customers)]
-    if groups and group_col:
-        filtered_df = filtered_df[filtered_df[group_col].isin(groups)]
+    # خيارات الفلاتر
+    customers_all = sorted(df[c_customer].dropna().astype(str).unique().tolist())
+    groups_all    = sorted(df[c_group].dropna().astype(str).unique().tolist())
+    items_all     = sorted(df[c_item].dropna().astype(str).unique().tolist())
 
-    # عرض ملخص البطاقات
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.metric("إجمالي المنتجات", len(filtered_df[product_col].unique()))
-    if qty_col:
-        with col2:
-            st.metric("إجمالي الكميات", filtered_df[qty_col].sum())
-    if total_col:
-        with col3:
-            st.metric("إجمالي المبيعات", f"{filtered_df[total_col].sum():,.2f}")
+    # نطاق التاريخ (إن توفر عمود التاريخ)
+    if c_date and c_date in df.columns:
+        min_d = pd.to_datetime(df[c_date], errors="coerce").min()
+        max_d = pd.to_datetime(df[c_date], errors="coerce").max()
+        if pd.isna(min_d) or pd.isna(max_d):
+            c_date = None  # تاريخ غير صالح -> لا نعرض فلتر التاريخ
 
-    # جدول تفصيلي
-    st.subheader("📋 تفاصيل المبيعات")
-    st.dataframe(filtered_df)
+    # قيَم افتراضية محفوظة
+    st.session_state.setdefault("prod_selected_customers", [])
+    st.session_state.setdefault("prod_selected_groups", [])
+    st.session_state.setdefault("prod_selected_items", [])
+    if c_date:
+        st.session_state.setdefault("prod_date_from", (min_d or datetime.date.today()).date())
+        st.session_state.setdefault("prod_date_to",   (max_d or datetime.date.today()).date())
 
-    # رسم بياني
-    if total_col:
-        sales_summary = filtered_df.groupby(product_col)[total_col].sum().sort_values(ascending=False)
-        st.bar_chart(sales_summary)
+    with fc1:
+        sel_customers = st.multiselect(
+            "العملاء", options=customers_all,
+            default=st.session_state["prod_selected_customers"],
+            key="prod_selected_customers",
+            help="يمكن البحث بالكتابة داخل الصندوق"
+        )
+    with fc2:
+        sel_groups = st.multiselect(
+            "مجموعات المنتجات", options=groups_all,
+            default=st.session_state["prod_selected_groups"],
+            key="prod_selected_groups"
+        )
+    with fc3:
+        sel_items = st.multiselect(
+            "المنتجات (الأصناف)", options=items_all,
+            default=st.session_state["prod_selected_items"],
+            key="prod_selected_items"
+        )
+
+    if c_date:
+        with fc4:
+            d_from = st.date_input("من تاريخ", value=st.session_state["prod_date_from"], key="prod_date_from")
+        with fc5:
+            d_to   = st.date_input("إلى تاريخ", value=st.session_state["prod_date_to"], key="prod_date_to")
+    else:
+        d_from = d_to = None
+
+    st.markdown("---")
+
+    # 3) تطبيق الفلاتر
+    dff = df.copy()
+    if sel_customers:
+        dff = dff[dff[c_customer].astype(str).isin(sel_customers)]
+    if sel_groups:
+        dff = dff[dff[c_group].astype(str).isin(sel_groups)]
+    if sel_items:
+        dff = dff[dff[c_item].astype(str).isin(sel_items)]
+    if c_date and d_from and d_to:
+        dd = pd.to_datetime(dff[c_date], errors="coerce").dt.date
+        dff = dff[(dd >= d_from) & (dd <= d_to)]
+
+    if dff.empty:
+        st.warning("لا توجد بيانات مطابقة للفلاتر المحددة.")
+        return
+
+    # 4) مؤشرات رئيسية (KPIs)
+    total_sales  = float(dff["__sales_total__"].sum()) if "__sales_total__" in dff.columns else 0.0
+    total_cost   = float(dff["__cost_total__"].sum()) if "__cost_total__" in dff.columns else 0.0
+    total_profit = float(dff["الربح"].sum()) if "الربح" in dff.columns else (total_sales - total_cost)
+    total_qty    = float(dff["__qty__"].sum()) if "__qty__" in dff.columns else np.nan
+    margin_pct   = (total_profit/total_sales*100.0) if total_sales else np.nan
+    inv_count    = dff[c_invoice].nunique() if c_invoice and c_invoice in dff.columns else np.nan
+    n_customers  = dff[c_customer].nunique()
+    n_groups     = dff[c_group].nunique()
+    n_items      = dff[c_item].nunique()
+
+    k1, k2, k3, k4 = st.columns(4)
+    k5, k6, k7, k8 = st.columns(4)
+    k1.metric("إجمالي المبيعات", f"{total_sales:,.0f}")
+    k2.metric("إجمالي التكلفة", f"{total_cost:,.0f}")
+    k3.metric("إجمالي الربح", f"{total_profit:,.0f}")
+    k4.metric("هامش الربح %", "-" if pd.isna(margin_pct) else f"{margin_pct:,.0f}%")
+    k5.metric("إجمالي الكمية", "-" if pd.isna(total_qty) else f"{total_qty:,.0f}")
+    k6.metric("عدد العملاء", f"{n_customers:,}")
+    k7.metric("عدد المجموعات", f"{n_groups:,}")
+    k8.metric("عدد المنتجات", f"{n_items:,}")
+
+    st.markdown("---")
+
+    # 5) جداول ملخصة مفيدة لصاحب العمل
+    # أ) أفضل المنتجات
+    top_products = (
+        dff.groupby(c_item, dropna=False)
+           .agg(الكمية=("__qty__", "sum"),
+                المبيعات=("**sales**" if "**sales**" in [] else "__sales_total__", "sum"),
+                التكلفة=("__cost_total__", "sum"),
+                الربح=("الربح", "sum"))
+           .reset_index()
+    )
+    # معالجة الاسم الفعلي لعمود المبيعات (نضمن أنه __sales_total__)
+    if "المبيعات" not in top_products.columns and "__sales_total__" in dff.columns:
+        top_products = (
+            dff.groupby(c_item, dropna=False)
+               .agg(الكمية=("__qty__", "sum"),
+                    المبيعات=("__sales_total__", "sum"),
+                    التكلفة=("__cost_total__", "sum"),
+                    الربح=("الربح", "sum"))
+               .reset_index()
+        )
+    top_products["% الربح"] = np.where(top_products["المبيعات"]!=0,
+                                       (top_products["الربح"]/top_products["المبيعات"])*100.0, np.nan)
+    top_products = top_products.sort_values("المبيعات", ascending=False)
+
+    # ب) أفضل المجموعات
+    top_groups = (
+        dff.groupby(c_group, dropna=False)
+           .agg(الكمية=("__qty__", "sum"),
+                المبيعات=("__sales_total__", "sum"),
+                التكلفة=("__cost_total__", "sum"),
+                الربح=("الربح", "sum"))
+           .reset_index()
+           .sort_values("المبيعات", ascending=False)
+    )
+    top_groups["% الربح"] = np.where(top_groups["المبيعات"]!=0,
+                                     (top_groups["الربح"]/top_groups["المبيعات"])*100.0, np.nan)
+
+    # ج) مصفوفة (عميل × مجموعة) مفيدة جدًا
+    cust_group = (
+        dff.groupby([c_customer, c_group], dropna=False)
+           .agg(المبيعات=("__sales_total__", "sum"),
+                الربح=("الربح", "sum"),
+                الكمية=("__qty__", "sum"))
+           .reset_index()
+    )
+    with np.errstate(divide="ignore", invalid="ignore"):
+        cust_group["% الربح"] = np.where(cust_group["المبيعات"]!=0,
+                                         (cust_group["الربح"]/cust_group["المبيعات"])*100.0, np.nan)
+
+    # 6) عرض سريع
+    st.markdown("### 🏆 أعلى المنتجات مبيعًا")
+    tp_show = top_products.copy()
+    for col in ["الكمية", "المبيعات", "التكلفة", "الربح"]:
+        if col in tp_show.columns:
+            tp_show[col] = tp_show[col].apply(lambda x: f"{x:,.0f}")
+    if "% الربح" in tp_show.columns:
+        tp_show["% الربح"] = tp_show["% الربح"].apply(lambda x: "" if pd.isna(x) else f"{x:,.0f}%")
+    st.dataframe(tp_show.head(50), use_container_width=True, hide_index=True)
+
+    st.markdown("### 🧩 أعلى المجموعات مبيعًا")
+    tg_show = top_groups.copy()
+    for col in ["الكمية", "المبيعات", "التكلفة", "الربح"]:
+        if col in tg_show.columns:
+            tg_show[col] = tg_show[col].apply(lambda x: f"{x:,.0f}")
+    if "% الربح" in tg_show.columns:
+        tg_show["% الربح"] = tg_show["% الربح"].apply(lambda x: "" if pd.isna(x) else f"{x:,.0f}%")
+    st.dataframe(tg_show.head(50), use_container_width=True, hide_index=True)
+
+    st.markdown("### 👥 مصفوفة (العميل × المجموعة)")
+    cg_show = cust_group.copy()
+    for col in ["الكمية", "المبيعات", "الربح"]:
+        if col in cg_show.columns:
+            cg_show[col] = cg_show[col].apply(lambda x: f"{x:,.0f}")
+    if "% الربح" in cg_show.columns:
+        cg_show["% الربح"] = cg_show["% الربح"].apply(lambda x: "" if pd.isna(x) else f"{x:,.0f}%")
+    st.dataframe(cg_show, use_container_width=True, hide_index=True)
+
+    # 7) رسومات (اختياري، إن توافرت plotly)
+    try:
+        import plotly.express as px
+        st.markdown("### 📊 رسوم بيانية سريعة")
+        c1, c2 = st.columns(2)
+        with c1:
+            top_n = top_products.head(15)
+            fig_p = px.bar(top_n, x=c_item, y="المبيعات", title="أعلى 15 منتجًا (مبيعات)")
+            fig_p.update_layout(margin=dict(l=10, r=10, t=40, b=10))
+            st.plotly_chart(fig_p, use_container_width=True)
+        with c2:
+            grp_n = top_groups.head(10)
+            fig_g = px.pie(grp_n, names=c_group, values="المبيعات", title="حصة المجموعات من المبيعات")
+            fig_g.update_layout(margin=dict(l=10, r=10, t=40, b=10))
+            st.plotly_chart(fig_g, use_container_width=True)
+    except Exception:
+        pass
+
+    # 8) تنزيل Excel للملخصات
+    st.markdown("---")
+    out = BytesIO()
+    with pd.ExcelWriter(out, engine="xlsxwriter") as writer:
+        # جداول الملخص
+        top_products.to_excel(writer, index=False, sheet_name="Top_Products")
+        top_groups.to_excel(writer, index=False, sheet_name="Top_Groups")
+        cust_group.to_excel(writer, index=False, sheet_name="Customer_x_Group")
+
+        # ورقة إجمالي المؤشرات
+        summary_df = pd.DataFrame([{
+            "إجمالي المبيعات": total_sales,
+            "إجمالي التكلفة": total_cost,
+            "إجمالي الربح": total_profit,
+            "هامش الربح %": margin_pct,
+            "إجمالي الكمية": total_qty,
+            "عدد الفواتير": inv_count,
+            "عدد العملاء": n_customers,
+            "عدد المجموعات": n_groups,
+            "عدد المنتجات": n_items,
+        }])
+        summary_df.to_excel(writer, index=False, sheet_name="Summary")
+
+        # تنسيقات بسيطة
+        wb = writer.book
+        num_fmt = wb.add_format({"num_format": "#,##0"})
+        pct_fmt = wb.add_format({"num_format": '#,##0"%"'})
+        for sh in ["Top_Products", "Top_Groups", "Customer_x_Group", "Summary"]:
+            if sh in writer.sheets:
+                ws = writer.sheets[sh]
+                ws.set_column(0, 0, 28)  # عمود الاسم
+                ws.set_column(1, 30, 18, num_fmt)
+        # عمود النسبة
+        for sh in ["Top_Products", "Top_Groups", "Customer_x_Group", "Summary"]:
+            if sh in writer.sheets:
+                ws = writer.sheets[sh]
+                # محاولة تطبيق تنسيق للنسب إن وُجد العمود
+                try:
+                    # ابحث عن العمود بالاسم
+                    if sh in ["Top_Products", "Top_Groups", "Customer_x_Group"]:
+                        # غالبًا اسم العمود "% الربح"
+                        # لا نعرف فهرسه يقينًا هنا؛ سنتركه كما هو إن تعذر
+                        pass
+                except Exception:
+                    pass
+
+    st.download_button(
+        label="⬇️ تنزيل تقارير المنتجات (Excel)",
+        data=out.getvalue(),
+        file_name="products_groups_analysis.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
 
 
 
@@ -793,7 +1003,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-
-
