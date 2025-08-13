@@ -704,6 +704,30 @@ def pivot_tab(df: pd.DataFrame):
     )
 
 
+
+
+def products_analysis_tab(df):
+    st.header("📦 تحليل المنتجات والمجموعات")
+
+    # فلتر العملاء
+    customers = st.multiselect("اختر العملاء", df["العميل"].unique())
+
+    # فلتر المجموعات
+    groups = st.multiselect("اختر المجموعات", df["المجموعة"].unique())
+
+    filtered_df = df.copy()
+    if customers:
+        filtered_df = filtered_df[filtered_df["العميل"].isin(customers)]
+    if groups:
+        filtered_df = filtered_df[filtered_df["المجموعة"].isin(groups)]
+
+    total_sales = filtered_df["المبيعات"].sum()
+    st.metric("إجمالي المبيعات", f"{total_sales:,.2f}")
+
+    st.dataframe(filtered_df)
+
+
+
 # -------------------------------
 # Main
 # -------------------------------
@@ -734,22 +758,3 @@ if __name__ == "__main__":
 
 
 
-def products_analysis_tab(df):
-    st.header("📦 تحليل المنتجات والمجموعات")
-
-    # فلتر العملاء
-    customers = st.multiselect("اختر العملاء", df["العميل"].unique())
-
-    # فلتر المجموعات
-    groups = st.multiselect("اختر المجموعات", df["المجموعة"].unique())
-
-    filtered_df = df.copy()
-    if customers:
-        filtered_df = filtered_df[filtered_df["العميل"].isin(customers)]
-    if groups:
-        filtered_df = filtered_df[filtered_df["المجموعة"].isin(groups)]
-
-    total_sales = filtered_df["المبيعات"].sum()
-    st.metric("إجمالي المبيعات", f"{total_sales:,.2f}")
-
-    st.dataframe(filtered_df)
