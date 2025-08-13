@@ -705,26 +705,64 @@ def pivot_tab(df: pd.DataFrame):
 
 
 
-
 def products_analysis_tab(df):
     st.header("📦 تحليل المنتجات والمجموعات")
 
-    # فلتر العملاء
-    customers = st.multiselect("اختر العملاء", df["العميل"].unique())
+    # محاولة تحديد اسم عمود العميل وعمود المجموعة بشكل ديناميكي
+    customer_col = None
+    group_col = None
+    product_col = None
+    qty_col = None
+    total_col = None
 
-    # فلتر المجموعات
-    groups = st.multiselect("اختر المجموعات", df["المجموعة"].unique())
+    for col in df.columns:
+        if "عميل" in col or "Customer" in col:
+            customer_col = col
+        elif "مجموعة" in col or "Group" in col:
+            group_col = col
+        elif "منتج" in col or "Product" in col:
+            product_col = col
+        elif "كمية" in col or "Quantity" in col:
+            qty_col = col
+        elif "إجمالي" in col or "Total" in col or "قيمة" in col:
+            total_col = col
+
+    # تحقق من الأعمدة المطلوبة
+    if not customer_col or not product_col:
+        st.error("❌ لم يتم العثور على أعمدة العميل أو المنتج في الملف")
+        return
+
+    # فلاتر
+    customers = st.multiselect("اختر العملاء", df[customer_col].dropna().unique())
+    groups = []
+    if group_col:
+        groups = st.multiselect("اختر المجموعات", df[group_col].dropna().unique())
 
     filtered_df = df.copy()
     if customers:
-        filtered_df = filtered_df[filtered_df["العميل"].isin(customers)]
-    if groups:
-        filtered_df = filtered_df[filtered_df["المجموعة"].isin(groups)]
+        filtered_df = filtered_df[filtered_df[customer_col].isin(customers)]
+    if groups and group_col:
+        filtered_df = filtered_df[filtered_df[group_col].isin(groups)]
 
-    total_sales = filtered_df["المبيعات"].sum()
-    st.metric("إجمالي المبيعات", f"{total_sales:,.2f}")
+    # عرض ملخص البطاقات
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("إجمالي المنتجات", len(filtered_df[product_col].unique()))
+    if qty_col:
+        with col2:
+            st.metric("إجمالي الكميات", filtered_df[qty_col].sum())
+    if total_col:
+        with col3:
+            st.metric("إجمالي المبيعات", f"{filtered_df[total_col].sum():,.2f}")
 
+    # جدول تفصيلي
+    st.subheader("📋 تفاصيل المبيعات")
     st.dataframe(filtered_df)
+
+    # رسم بياني
+    if total_col:
+        sales_summary = filtered_df.groupby(product_col)[total_col].sum().sort_values(ascending=False)
+        st.bar_chart(sales_summary)
 
 
 
@@ -755,6 +793,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
